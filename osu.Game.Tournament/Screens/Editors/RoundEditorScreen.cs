@@ -1,6 +1,7 @@
 ﻿// Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
 // See the LICENCE file in the repository root for full licence text.
 
+using System.Globalization;
 using System.Linq;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
@@ -163,7 +164,12 @@ namespace osu.Game.Tournament.Screens.Editors
 
                     private readonly Bindable<string> mods = new Bindable<string>(string.Empty);
 
+                    private readonly Bindable<bool> useCustomModMultipliers = new Bindable<bool>();
+                    private readonly Bindable<string> ezMultiplierText = new Bindable<string>("1.0");
+                    private readonly Bindable<string> ezhdMultiplierText = new Bindable<string>("1.0");
+
                     private readonly Container drawableContainer;
+                    private FillFlowContainer multiplierRow = null!;
 
                     public RoundBeatmapRow(TournamentRound team, RoundBeatmap beatmap)
                     {
@@ -189,27 +195,73 @@ namespace osu.Game.Tournament.Screens.Editors
                                 Margin = new MarginPadding(5),
                                 Padding = new MarginPadding { Right = 160 },
                                 Spacing = new Vector2(5),
-                                Direction = FillDirection.Horizontal,
+                                Direction = FillDirection.Vertical,
                                 AutoSizeAxes = Axes.Both,
                                 Children = new Drawable[]
                                 {
-                                    new SettingsNumberBox
+                                    new FillFlowContainer
                                     {
-                                        LabelText = "Beatmap ID",
-                                        RelativeSizeAxes = Axes.None,
-                                        Width = 200,
-                                        Current = beatmapId,
+                                        Spacing = new Vector2(5),
+                                        Direction = FillDirection.Horizontal,
+                                        AutoSizeAxes = Axes.Both,
+                                        Children = new Drawable[]
+                                        {
+                                            new SettingsNumberBox
+                                            {
+                                                LabelText = "Beatmap ID",
+                                                RelativeSizeAxes = Axes.None,
+                                                Width = 200,
+                                                Current = beatmapId,
+                                            },
+                                            new SettingsTextBox
+                                            {
+                                                LabelText = "Mods",
+                                                RelativeSizeAxes = Axes.None,
+                                                Width = 200,
+                                                Current = mods,
+                                            },
+                                            new Container
+                                            {
+                                                AutoSizeAxes = Axes.X,
+                                                Height = 70,
+                                                Child = new SettingsCheckbox
+                                                {
+                                                    Anchor = Anchor.CentreLeft,
+                                                    Origin = Anchor.CentreLeft,
+                                                    LabelText = "Custom Mod Multipliers",
+                                                    RelativeSizeAxes = Axes.None,
+                                                    Width = 170,
+                                                    Current = useCustomModMultipliers,
+                                                },
+                                            },
+                                            drawableContainer = new Container
+                                            {
+                                                Size = new Vector2(100, 70),
+                                            },
+                                        }
                                     },
-                                    new SettingsTextBox
+                                    multiplierRow = new FillFlowContainer
                                     {
-                                        LabelText = "Mods",
-                                        RelativeSizeAxes = Axes.None,
-                                        Width = 200,
-                                        Current = mods,
-                                    },
-                                    drawableContainer = new Container
-                                    {
-                                        Size = new Vector2(100, 70),
+                                        Spacing = new Vector2(5),
+                                        Direction = FillDirection.Horizontal,
+                                        AutoSizeAxes = Axes.Both,
+                                        Children = new Drawable[]
+                                        {
+                                            new SettingsTextBox
+                                            {
+                                                LabelText = "EZ Multiplier",
+                                                RelativeSizeAxes = Axes.None,
+                                                Width = 200,
+                                                Current = ezMultiplierText,
+                                            },
+                                            new SettingsTextBox
+                                            {
+                                                LabelText = "EZHD Multiplier",
+                                                RelativeSizeAxes = Axes.None,
+                                                Width = 200,
+                                                Current = ezhdMultiplierText,
+                                            },
+                                        }
                                     },
                                 }
                             },
@@ -265,6 +317,55 @@ namespace osu.Game.Tournament.Screens.Editors
 
                         mods.Value = Model.Mods;
                         mods.BindValueChanged(modString => Model.Mods = modString.NewValue);
+
+                        useCustomModMultipliers.Value = Model.CustomModMultipliers?.Enabled ?? false;
+                        ezMultiplierText.Value = (Model.CustomModMultipliers?.EZ ?? 1.0).ToString(CultureInfo.InvariantCulture);
+                        ezhdMultiplierText.Value = (Model.CustomModMultipliers?.EZHD ?? 1.0).ToString(CultureInfo.InvariantCulture);
+
+                        useCustomModMultipliers.BindValueChanged(value =>
+                        {
+                            if (value.NewValue)
+                            {
+                                Model.CustomModMultipliers ??= new CustomModMultipliers();
+                                Model.CustomModMultipliers.Enabled = true;
+
+                                if (tryParseDouble(ezMultiplierText.Value, out double ez))
+                                    Model.CustomModMultipliers.EZ = ez;
+
+                                if (tryParseDouble(ezhdMultiplierText.Value, out double ezhd))
+                                    Model.CustomModMultipliers.EZHD = ezhd;
+                            }
+                            else
+                            {
+                                Model.CustomModMultipliers = null;
+                            }
+
+                            updateMultiplierVisibility();
+                        }, true);
+
+                        ezMultiplierText.BindValueChanged(value =>
+                        {
+                            if (Model.CustomModMultipliers != null && tryParseDouble(value.NewValue, out double parsed))
+                                Model.CustomModMultipliers.EZ = parsed;
+                        });
+
+                        ezhdMultiplierText.BindValueChanged(value =>
+                        {
+                            if (Model.CustomModMultipliers != null && tryParseDouble(value.NewValue, out double parsed))
+                                Model.CustomModMultipliers.EZHD = parsed;
+                        });
+                    }
+
+                    private void updateMultiplierVisibility()
+                    {
+                        multiplierRow.Alpha = useCustomModMultipliers.Value ? 1 : 0;
+                    }
+
+                    // Accepts both period and comma as decimal separator to handle locale differences.
+                    private static bool tryParseDouble(string value, out double result)
+                    {
+                        string normalized = value.Replace(',', '.');
+                        return double.TryParse(normalized, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out result);
                     }
 
                     private void updatePanel() => Schedule(() =>

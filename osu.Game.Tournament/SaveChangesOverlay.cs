@@ -12,6 +12,7 @@ using osu.Framework.Input.Bindings;
 using osu.Framework.Input.Events;
 using osu.Game.Graphics;
 using osu.Game.Online.Multiplayer;
+using osu.Game.Tournament.Models;
 using osuTK;
 
 namespace osu.Game.Tournament
@@ -21,7 +22,12 @@ namespace osu.Game.Tournament
         [Resolved]
         private TournamentGame tournamentGame { get; set; } = null!;
 
+        [Resolved]
+        private HelperInfo helperInfo { get; set; } = null!;
+
         private string? lastSerialisedLadder;
+        private string? lastSerialisedHelperInfo;
+
         private readonly TourneyButton saveChangesButton;
 
         public SaveChangesOverlay()
@@ -65,11 +71,15 @@ namespace osu.Game.Tournament
         private async Task checkForChanges()
         {
             string serialisedLadder = await Task.Run(() => tournamentGame.GetSerialisedLadder()).ConfigureAwait(true);
+            string serialisedHelperInfo = await Task.Run(() => helperInfo.Serialise()).ConfigureAwait(true);
 
             // If a save hasn't been triggered by the user yet, populate the initial value
             lastSerialisedLadder ??= serialisedLadder;
+            lastSerialisedHelperInfo ??= serialisedHelperInfo;
 
-            if (lastSerialisedLadder != serialisedLadder && !saveChangesButton.Enabled.Value)
+            bool hasChanges = lastSerialisedLadder != serialisedLadder || lastSerialisedHelperInfo != serialisedHelperInfo;
+
+            if (hasChanges && !saveChangesButton.Enabled.Value)
             {
                 saveChangesButton.Enabled.Value = true;
                 saveChangesButton.Background
@@ -101,7 +111,10 @@ namespace osu.Game.Tournament
         private void saveChanges()
         {
             tournamentGame.SaveChanges();
+            helperInfo.SaveChanges();
+
             lastSerialisedLadder = tournamentGame.GetSerialisedLadder();
+            lastSerialisedHelperInfo = helperInfo.Serialise();
 
             saveChangesButton.Enabled.Value = false;
             saveChangesButton.Background.FadeColour(saveChangesButton.BackgroundColour, 500);
