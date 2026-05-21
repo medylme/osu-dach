@@ -34,6 +34,7 @@ namespace osu.Game.Tournament
         private TournamentStorage storage = null!;
         private DependencyContainer dependencies = null!;
         private FileBasedIPC ipc = null!;
+        private HelperBasedIPC ipcHelper = null!;
         private BeatmapLookupCache beatmapCache = null!;
 
         protected Task BracketLoadTask => bracketLoadTaskCompletionSource.Task;
@@ -58,7 +59,7 @@ namespace osu.Game.Tournament
             base.SetHost(host);
 
             if (host.Window != null)
-                host.Window.Title = $"{Name} [tournament client]";
+                host.Window.Title = $"{Name} (DACH Fork) [tournament client]";
         }
 
         private TournamentSpriteText initialisationText = null!;
@@ -83,6 +84,7 @@ namespace osu.Game.Tournament
             Textures.AddTextureSource(new TextureLoaderStore(new StorageBackedResourceStore(storage)));
 
             dependencies.CacheAs(new StableInfo(storage));
+            dependencies.CacheAs(new HelperInfo(storage));
 
             beatmapCache = dependencies.Get<BeatmapLookupCache>();
         }
@@ -204,6 +206,9 @@ namespace osu.Game.Tournament
                 dependencies.Cache(ladder);
                 dependencies.CacheAs<MatchIPCInfo>(ipc = new FileBasedIPC());
                 Add(ipc);
+
+                dependencies.CacheAs(ipcHelper = new HelperBasedIPC());
+                Add(ipcHelper);
 
                 bracketLoadTaskCompletionSource.SetResult(true);
 

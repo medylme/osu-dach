@@ -168,7 +168,7 @@ namespace osu.Desktop
                     host.Window.SetIconFromStream(iconStream);
             }
 
-            host.Window.Title = Name;
+            host.Window.Title = $"{Name} (DACH Fork)";
         }
 
         protected override BatteryInfo CreateBatteryInfo() => FrameworkEnvironment.UseSDL3 ? new SDL3BatteryInfo() : new SDL2BatteryInfo();

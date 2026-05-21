@@ -1,6 +1,7 @@
 // Copyright (c) ppy Pty Ltd <contact@ppy.sh>. Licensed under the MIT Licence.
 // See the LICENCE file in the repository root for full licence text.
 
+using System;
 using System.Drawing;
 using osu.Framework.Allocation;
 using osu.Framework.Bindables;
@@ -26,6 +27,9 @@ namespace osu.Game.Tournament.Screens.Setup
 
         private LoginOverlay? loginOverlay;
         private ResolutionSelector resolution = null!;
+        private EndpointSelector helperEndpointSelector = null!;
+        private LabelledSwitchButton useHelperScoresSwitch = null!;
+        private Action? onHelperInfoSaved;
 
         [Resolved]
         private MatchIPCInfo ipc { get; set; } = null!;
@@ -41,6 +45,12 @@ namespace osu.Game.Tournament.Screens.Setup
 
         [Resolved]
         private TournamentSceneManager? sceneManager { get; set; }
+
+        [Resolved]
+        private HelperInfo helperInfo { get; set; } = null!;
+
+        [Resolved]
+        private HelperBasedIPC helperIPC { get; set; } = null!;
 
         private readonly IBindable<APIUser> localUser = new Bindable<APIUser>();
         private Bindable<Size> windowSize = null!;
@@ -73,6 +83,7 @@ namespace osu.Game.Tournament.Screens.Setup
 
             localUser.BindTo(api.LocalUser);
             localUser.BindValueChanged(_ => Schedule(reload));
+            helperInfo.OnHelperInfoSaved += onHelperInfoSaved = () => Schedule(reload);
             stableInfo.OnStableInfoSaved += () => Schedule(reload);
             reload();
         }
@@ -149,7 +160,29 @@ namespace osu.Game.Tournament.Screens.Setup
                     Description = "Team seeds will display alongside each team at the top in gameplay/map pool screens.",
                     Current = LadderInfo.DisplayTeamSeeds,
                 },
+                useHelperScoresSwitch = new LabelledSwitchButton
+                {
+                    Label = "Use helper for gameplay scores",
+                    Description = "When enabled, gameplay scores will be calculated using a osu-tourney-data-reader helper instead of file-based IPC. EZ(HD) multipliers will not work if this is disabled.",
+                    Current = helperInfo.HelperEnabled,
+                },
+                helperEndpointSelector = new EndpointSelector
+                {
+                    Label = "Helper WebSocket URL",
+                    ButtonText = "Connect",
+                    DefaultEndpoint = helperInfo.WebsocketUrl ?? "",
+                    Action = endpoint => helperIPC.SetWebsocketLocation(endpoint),
+                }
             };
+
+            helperInfo.HelperEnabled.BindValueChanged(e => helperEndpointSelector.SelectorEnabled.Value = e.NewValue, true);
+            ipc.HelperConnected.BindValueChanged(e => helperEndpointSelector.IsConnected.Value = e.NewValue, true);
+        }
+
+        protected override void Dispose(bool isDisposing)
+        {
+            base.Dispose(isDisposing);
+            helperInfo.OnHelperInfoSaved -= onHelperInfoSaved;
         }
 
         private const float aspect_ratio = 16f / 9f;

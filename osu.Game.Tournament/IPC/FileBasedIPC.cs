@@ -38,6 +38,9 @@ namespace osu.Game.Tournament.IPC
         [Resolved]
         private StableInfo stableInfo { get; set; } = null!;
 
+        [Resolved]
+        private HelperInfo helperInfo { get; set; } = null!;
+
         private int lastBeatmapId;
         private ScheduledDelegate? scheduled;
         private GetBeatmapRequest? beatmapLookupRequest;
@@ -145,8 +148,11 @@ namespace osu.Game.Tournament.IPC
                             using (var stream = IPCStorage.GetStream(file_ipc_scores_filename))
                             using (var sr = new StreamReader(stream))
                             {
-                                Score1.Value = int.Parse(sr.ReadLine().AsNonNull());
-                                Score2.Value = int.Parse(sr.ReadLine().AsNonNull());
+                                if (!helperInfo.HelperEnabled.Value)
+                                {
+                                    Score1.Value = int.Parse(sr.ReadLine().AsNonNull());
+                                    Score2.Value = int.Parse(sr.ReadLine().AsNonNull());
+                                }
                             }
                         }
                         catch (Exception)
