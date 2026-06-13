@@ -28,6 +28,9 @@ namespace osu.Game.Tournament.IPC
         private Action? onHelperInfoSaved;
         private int currentRetryDelay = initial_retry_delay_ms;
 
+        private int connectionGeneration;
+        private string? connectedUrl;
+
         [Resolved]
         private MatchIPCInfo ipc { get; set; } = null!;
 
@@ -51,6 +54,9 @@ namespace osu.Game.Tournament.IPC
 
             helperInfo.OnHelperInfoSaved += onHelperInfoSaved = () => Schedule(() =>
             {
+                if (helperInfo.WebsocketUrl == connectedUrl)
+                    return;
+
                 currentRetryDelay = initial_retry_delay_ms;
                 connectWebSocket();
             });
@@ -70,48 +76,63 @@ namespace osu.Game.Tournament.IPC
             cancellationTokenSource?.Dispose();
             webSocket?.Dispose();
 
-            webSocket = new ClientWebSocket();
-            cancellationTokenSource = new CancellationTokenSource();
+            connectedUrl = null;
+
+            int generation = ++connectionGeneration;
+            var ws = webSocket = new ClientWebSocket();
+            var cts = cancellationTokenSource = new CancellationTokenSource();
 
             Task.Run(async () =>
             {
-                if (helperInfo.WebsocketUrl == null) return;
+                string? url = helperInfo.WebsocketUrl;
+                if (url == null) return;
 
                 try
                 {
-                    await webSocket.ConnectAsync(new Uri(helperInfo.WebsocketUrl), cancellationTokenSource.Token).ConfigureAwait(false);
+                    await ws.ConnectAsync(new Uri(url), cts.Token).ConfigureAwait(false);
 
+                    if (generation != connectionGeneration) return;
+
+                    connectedUrl = url;
                     Schedule(() => ipc.HelperConnected.Value = true);
                     currentRetryDelay = initial_retry_delay_ms;
 
-                    await receiveLoopAsync().ConfigureAwait(false);
+                    await receiveLoopAsync(ws, cts, generation).ConfigureAwait(false);
                 }
                 catch (Exception e)
                 {
+                    if (generation != connectionGeneration) return;
+
+                    connectedUrl = null;
                     Schedule(() => ipc.HelperConnected.Value = false);
-                    Logger.Error(e, $"Failed to connect to helper websocket: {helperInfo.WebsocketUrl}");
+                    Logger.Error(e, $"Failed to connect to helper websocket: {url}");
                     resetScores();
-                    scheduleReconnect();
+                    scheduleReconnect(generation);
                 }
-            }, cancellationTokenSource.Token);
+            }, cts.Token);
         }
 
-        private void scheduleReconnect()
+        private void scheduleReconnect(int generation)
         {
+            if (generation != connectionGeneration)
+                return;
+
             if (IsDisposed || (cancellationTokenSource?.Token.IsCancellationRequested ?? true))
                 return;
 
             Logger.Log($"Scheduling WebSocket reconnect in {currentRetryDelay}ms");
 
+            var cts = cancellationTokenSource;
+
             Task.Run(async () =>
             {
                 try
                 {
-                    await Task.Delay(currentRetryDelay, cancellationTokenSource?.Token ?? CancellationToken.None).ConfigureAwait(false);
+                    await Task.Delay(currentRetryDelay, cts?.Token ?? CancellationToken.None).ConfigureAwait(false);
 
                     currentRetryDelay = Math.Min((int)(currentRetryDelay * retry_backoff_multiplier), max_retry_delay_ms);
 
-                    if (!IsDisposed && !(cancellationTokenSource?.Token.IsCancellationRequested ?? true))
+                    if (!IsDisposed && generation == connectionGeneration && !(cts?.Token.IsCancellationRequested ?? true))
                         Schedule(connectWebSocket);
                 }
                 catch (TaskCanceledException)
@@ -120,13 +141,13 @@ namespace osu.Game.Tournament.IPC
             });
         }
 
-        private async Task receiveLoopAsync()
+        private async Task receiveLoopAsync(ClientWebSocket ws, CancellationTokenSource cts, int generation)
         {
             byte[] buffer = new byte[8192];
 
-            while (!cancellationTokenSource?.Token.IsCancellationRequested ?? false)
+            while (!cts.Token.IsCancellationRequested)
             {
-                if (webSocket == null || webSocket.State != WebSocketState.Open)
+                if (ws.State != WebSocketState.Open)
                     break;
 
                 try
@@ -136,12 +157,15 @@ namespace osu.Game.Tournament.IPC
 
                     do
                     {
-                        result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationTokenSource?.Token ?? CancellationToken.None).ConfigureAwait(false);
+                        result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), cts.Token).ConfigureAwait(false);
 
                         if (result.MessageType == WebSocketMessageType.Close)
                         {
+                            if (generation != connectionGeneration) return;
+
+                            connectedUrl = null;
                             Schedule(() => ipc.HelperConnected.Value = false);
-                            scheduleReconnect();
+                            scheduleReconnect(generation);
                             return;
                         }
 
@@ -153,18 +177,22 @@ namespace osu.Game.Tournament.IPC
                 }
                 catch (Exception e)
                 {
+                    if (generation != connectionGeneration) return;
+
+                    connectedUrl = null;
                     Schedule(() => ipc.HelperConnected.Value = false);
                     Logger.Error(e, "Error receiving WebSocket data");
                     resetScores();
-                    scheduleReconnect();
+                    scheduleReconnect(generation);
                     return;
                 }
             }
 
-            if (!IsDisposed && !(cancellationTokenSource?.Token.IsCancellationRequested ?? true))
+            if (!IsDisposed && generation == connectionGeneration && !cts.Token.IsCancellationRequested)
             {
+                connectedUrl = null;
                 resetScores();
-                scheduleReconnect();
+                scheduleReconnect(generation);
             }
         }
 
