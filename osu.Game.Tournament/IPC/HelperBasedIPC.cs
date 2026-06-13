@@ -2,6 +2,7 @@
 // See the LICENCE file in the repository root for full licence text.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
@@ -196,14 +197,18 @@ namespace osu.Game.Tournament.IPC
             }
         }
 
-        private bool hasModAcronym(JsonElement modsElement, string acronym)
+        private static bool hasModAcronym(JsonElement modsElement, string acronym)
         {
-            if (!modsElement.TryGetProperty("mods", out var modsArray) || modsArray.ValueKind != JsonValueKind.Array)
+            if (modsElement.ValueKind != JsonValueKind.Object ||
+                !modsElement.TryGetProperty("mods", out var modsArray) ||
+                modsArray.ValueKind != JsonValueKind.Array)
                 return false;
 
             foreach (var mod in modsArray.EnumerateArray())
             {
-                if (mod.TryGetProperty("acronym", out var acronymElement) &&
+                if (mod.ValueKind == JsonValueKind.Object &&
+                    mod.TryGetProperty("acronym", out var acronymElement) &&
+                    acronymElement.ValueKind == JsonValueKind.String &&
                     acronymElement.GetString() == acronym)
                 {
                     return true;
@@ -213,22 +218,17 @@ namespace osu.Game.Tournament.IPC
             return false;
         }
 
-        private double getScoreMultiplier(int beatmapId, JsonElement modsElement)
+        private double getScoreMultiplier(int beatmapId, bool hasEZ, bool hasHD)
         {
-            var currentMatch = ladderInfo.CurrentMatch.Value;
-            var round = currentMatch?.Round.Value;
+            var round = ladderInfo.CurrentMatch.Value?.Round.Value;
 
             if (round == null)
                 return 1.0;
 
-            var roundBeatmap = round.Beatmaps.FirstOrDefault(b => b.ID == beatmapId);
-            var customMultipliers = roundBeatmap?.CustomModMultipliers;
+            var customMultipliers = round.Beatmaps.FirstOrDefault(b => b.ID == beatmapId)?.CustomModMultipliers;
 
             if (customMultipliers == null || !customMultipliers.Enabled)
                 return 1.0;
-
-            bool hasEZ = hasModAcronym(modsElement, "EZ");
-            bool hasHD = hasModAcronym(modsElement, "HD");
 
             if (hasEZ && hasHD)
                 return customMultipliers.EZHD;
@@ -248,50 +248,68 @@ namespace osu.Game.Tournament.IPC
                 using var document = JsonDocument.Parse(json);
                 var root = document.RootElement;
 
-                int currentBeatmapId = 0;
-                if (ipc.Beatmap.Value != null)
+                if (root.ValueKind != JsonValueKind.Object)
                 {
-                    currentBeatmapId = ipc.Beatmap.Value.OnlineID;
-                }
-                else if (root.TryGetProperty("beatmap", out var beatmapElement) &&
-                    beatmapElement.TryGetProperty("id", out var onlineIdElement))
-                {
-                    currentBeatmapId = onlineIdElement.GetInt32();
+                    resetScores();
+                    return;
                 }
 
-                if (root.TryGetProperty("tourney", out var tourney) &&
-                    tourney.TryGetProperty("clients", out var clients) &&
-                    clients.ValueKind == JsonValueKind.Array &&
-                    clients.GetArrayLength() > 0)
+                int messageBeatmapId = 0;
+                if (root.TryGetProperty("beatmap", out var beatmapElement) &&
+                    beatmapElement.ValueKind == JsonValueKind.Object &&
+                    beatmapElement.TryGetProperty("id", out var beatmapIdElement) &&
+                    beatmapIdElement.TryGetInt32(out int parsedBeatmapId))
                 {
-                    processClients(clients, currentBeatmapId);
-                }
-                else if (root.TryGetProperty("clients", out var rootClients) &&
-                    rootClients.ValueKind == JsonValueKind.Array &&
-                    rootClients.GetArrayLength() > 0)
-                {
-                    processClients(rootClients, currentBeatmapId);
+                    messageBeatmapId = parsedBeatmapId;
                 }
 
-                // Fallback to single player score for testing
-                else if (root.TryGetProperty("play", out var play) && play.TryGetProperty("score", out var singleScoreElement))
+                if (tryGetClients(root, out var clients))
                 {
-                    int score = singleScoreElement.GetInt32();
-
-                    JsonElement modsElement = default;
-                    if (play.TryGetProperty("mods", out var mods))
-                        modsElement = mods;
-
-                    double multiplier = getScoreMultiplier(currentBeatmapId, modsElement);
-                    long finalScore = (long)(score * multiplier);
+                    var parsed = parseClients(clients);
 
                     Scheduler.Add(() =>
                     {
-                        if (!IsDisposed)
+                        if (IsDisposed) return;
+
+                        int beatmapId = ipc.Beatmap.Value?.OnlineID ?? messageBeatmapId;
+                        long team0Total = 0;
+                        long team1Total = 0;
+
+                        foreach (var c in parsed)
                         {
-                            ipc.Score1.Value = finalScore;
-                            ipc.Score2.Value = 0;
+                            long finalScore = (long)(c.Score * getScoreMultiplier(beatmapId, c.HasEZ, c.HasHD));
+
+                            if (c.Team == 0)
+                                team0Total += finalScore;
+                            else if (c.Team == 1)
+                                team1Total += finalScore;
                         }
+
+                        ipc.Score1.Value = team0Total;
+                        ipc.Score2.Value = team1Total;
+                    });
+                }
+                else if (root.TryGetProperty("play", out var play) &&
+                         play.ValueKind == JsonValueKind.Object &&
+                         play.TryGetProperty("score", out var singleScoreElement) &&
+                         singleScoreElement.TryGetInt64(out long singleScore))
+                {
+                    bool hasEZ = false;
+                    bool hasHD = false;
+
+                    if (play.TryGetProperty("mods", out var mods))
+                    {
+                        hasEZ = hasModAcronym(mods, "EZ");
+                        hasHD = hasModAcronym(mods, "HD");
+                    }
+
+                    Scheduler.Add(() =>
+                    {
+                        if (IsDisposed) return;
+
+                        int beatmapId = ipc.Beatmap.Value?.OnlineID ?? messageBeatmapId;
+                        ipc.Score1.Value = (long)(singleScore * getScoreMultiplier(beatmapId, hasEZ, hasHD));
+                        ipc.Score2.Value = 0;
                     });
                 }
                 else
@@ -305,44 +323,55 @@ namespace osu.Game.Tournament.IPC
             }
         }
 
-        private void processClients(JsonElement clients, int currentBeatmapId)
+        private static bool tryGetClients(JsonElement root, out JsonElement clients)
         {
-            long team0Total = 0;
-            long team1Total = 0;
+            if (root.TryGetProperty("tourney", out var tourney) &&
+                tourney.ValueKind == JsonValueKind.Object &&
+                tourney.TryGetProperty("clients", out clients) &&
+                clients.ValueKind == JsonValueKind.Array &&
+                clients.GetArrayLength() > 0)
+                return true;
+
+            if (root.TryGetProperty("clients", out clients) &&
+                clients.ValueKind == JsonValueKind.Array &&
+                clients.GetArrayLength() > 0)
+                return true;
+
+            clients = default;
+            return false;
+        }
+
+        private static List<ParsedClient> parseClients(JsonElement clients)
+        {
+            var result = new List<ParsedClient>();
 
             foreach (var client in clients.EnumerateArray())
             {
-                if (!client.TryGetProperty("score", out var scoreElement))
+                if (client.ValueKind != JsonValueKind.Object)
                     continue;
 
-                int score = scoreElement.GetInt32();
+                if (!client.TryGetProperty("score", out var scoreElement) || !scoreElement.TryGetInt64(out long score))
+                    continue;
 
-                JsonElement modsElement = default;
+                if (!client.TryGetProperty("team", out var teamElement) || !teamElement.TryGetInt32(out int team))
+                    continue;
+
+                bool hasEZ = false;
+                bool hasHD = false;
+
                 if (client.TryGetProperty("mods", out var mods))
-                    modsElement = mods;
-
-                double multiplier = getScoreMultiplier(currentBeatmapId, modsElement);
-                long finalScore = (long)(score * multiplier);
-
-                if (client.TryGetProperty("team", out var teamElement))
                 {
-                    int team = teamElement.GetInt32();
-                    if (team == 0)
-                        team0Total += finalScore;
-                    else if (team == 1)
-                        team1Total += finalScore;
+                    hasEZ = hasModAcronym(mods, "EZ");
+                    hasHD = hasModAcronym(mods, "HD");
                 }
+
+                result.Add(new ParsedClient(score, team, hasEZ, hasHD));
             }
 
-            Scheduler.Add(() =>
-            {
-                if (!IsDisposed)
-                {
-                    ipc.Score1.Value = team0Total;
-                    ipc.Score2.Value = team1Total;
-                }
-            });
+            return result;
         }
+
+        private readonly record struct ParsedClient(long Score, int Team, bool HasEZ, bool HasHD);
 
         private void resetScores()
         {

@@ -143,21 +143,21 @@ namespace osu.Game.Tournament.IPC
                             // file might be in use.
                         }
 
-                        try
+                        if (!helperInfo.HelperEnabled.Value)
                         {
-                            using (var stream = IPCStorage.GetStream(file_ipc_scores_filename))
-                            using (var sr = new StreamReader(stream))
+                            try
                             {
-                                if (!helperInfo.HelperEnabled.Value)
+                                using (var stream = IPCStorage.GetStream(file_ipc_scores_filename))
+                                using (var sr = new StreamReader(stream))
                                 {
                                     Score1.Value = int.Parse(sr.ReadLine().AsNonNull());
                                     Score2.Value = int.Parse(sr.ReadLine().AsNonNull());
                                 }
                             }
-                        }
-                        catch (Exception)
-                        {
-                            // file might be in use.
+                            catch (Exception)
+                            {
+                                // file might be in use.
+                            }
                         }
                     }, 250, true);
                 }

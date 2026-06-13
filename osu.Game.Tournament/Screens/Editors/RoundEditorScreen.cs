@@ -361,11 +361,18 @@ namespace osu.Game.Tournament.Screens.Editors
                         multiplierRow.Alpha = useCustomModMultipliers.Value ? 1 : 0;
                     }
 
+                    private const double min_multiplier = 0.1;
+                    private const double max_multiplier = 10.0;
+
                     // Accepts both period and comma as decimal separator to handle locale differences.
                     private static bool tryParseDouble(string value, out double result)
                     {
                         string normalized = value.Replace(',', '.');
-                        return double.TryParse(normalized, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out result);
+
+                        if (!double.TryParse(normalized, NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out result))
+                            return false;
+
+                        return double.IsFinite(result) && result >= min_multiplier && result <= max_multiplier;
                     }
 
                     private void updatePanel() => Schedule(() =>
